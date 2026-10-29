@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team Dashboard</title>
+<style>
+  :root{
+    --bg:#0e1b2c; --bar:#13263d; --ink:#e8f1fa; --muted:#8fa6bd; --accent:#2fb4e6; --line:#25405c;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Segoe UI",system-ui,Arial,sans-serif;overflow:hidden}
+  #bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--bar);border-bottom:1px solid var(--line);transition:margin-top .25s}
+  body.hidebar #bar{margin-top:-44px}
+  #bar .title{font-weight:600;margin-right:auto;font-size:15px}
+  button{background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.on{background:var(--accent);color:#04202e;border-color:var(--accent)}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  #stage{height:calc(100% - 44px);display:flex;gap:6px;padding:6px;transition:height .25s}
+  body.hidebar #stage{height:100%}
+  .pane{flex:1;min-width:0;display:flex;flex-direction:column;background:#fff;border-radius:6px;overflow:hidden;position:relative}
+  .pane iframe{flex:1;width:100%;border:0;background:#fff}
+  .pane .label{position:absolute;top:6px;left:6px;z-index:2;background:rgba(14,27,44,.75);color:var(--ink);font-size:12px;padding:3px 8px;border-radius:4px;pointer-events:none}
+  body.hidebar .label{display:none}
+  .empty{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#47607a;padding:24px;font-size:15px;line-height:1.5}
+  /* layouts */
+  body.stack #stage{flex-direction:column}
+  body.single .pane{display:none}
+  body.single .pane.active{display:flex}
+  /* settings */
+  dialog{background:var(--bar);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:20px;width:min(640px,92vw)}
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  dialog h2{margin:0 0 14px;font-size:17px}
+  label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
+  input[type=text],input[type=number]{width:100%;padding:8px 10px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;font:inherit;font-size:13px}
+  .row{display:flex;gap:10px}.row>div{flex:1}
+  .hint{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.4}
+  .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <span class="title" id="titleText">Team Dashboard</span>
+  <button id="btnLayout" title="Switch layout (L)">Layout: Side by side</button>
+  <button id="btnRotate" title="Auto-rotate between reports (R)">Auto-rotate: off</button>
+  <button id="btnRefresh" title="Reload both reports">Reload</button>
+  <button id="btnSettings">Settings</button>
+  <button id="btnFull" title="Full screen (F)">Full screen</button>
+</div>
+
+<div id="stage">
+  <section class="pane active" id="pane1"><span class="label" id="label1"></span></section>
+  <section class="pane" id="pane2"><span class="label" id="label2"></span></section>
+</div>
+
+<dialog id="dlg">
+  <h2>Dashboard settings</h2>
+  <label for="n1">Report 1 name</label>
+  <input type="text" id="n1" placeholder="Power BI report">
+  <label for="u1">Report 1 URL (Power BI embed link)</label>
+  <input type="text" id="u1" placeholder="https://app.powerbi.com/reportEmbed?reportId=...">
+  <div class="hint">Power BI: File → Embed report → Publish to web (public), or Website/portal (needs sign-in). Paste the link, not the iframe code.</div>
+
+  <label for="n2">Report 2 name</label>
+  <input type="text" id="n2" placeholder="In-house report">
+  <label for="u2">Report 2 URL (in-house page)</label>
+  <input type="text" id="u2" placeholder="http://192.168.1.10/reports/daily">
+
+  <div class="row">
+    <div><label for="rot">Rotate every (seconds)</label><input type="number" id="rot" min="5" value="30"></div>
+    <div><label for="ref">Reload every (minutes, 0 = never)</label><input type="number" id="ref" min="0" value="10"></div>
+  </div>
+  <div class="actions">
+    <button id="btnCancel">Cancel</button>
+    <button id="btnSave" class="on">Save</button>
+  </div>
+</dialog>
+
+<script>
+/* ---- Edit these defaults if you want the page to open pre-configured ---- */
+const DEFAULTS = {
+  n1: "Power BI – KRA Report",
+  u1: "",   // e.g. https://app.powerbi.com/reportEmbed?reportId=XXXX&autoAuth=true&ctid=YYYY
+  n2: "In-house Report",
+  u2: "",   // e.g. http://192.168.1.10/reports/daily
+  rot: 30,
+  ref: 10
+};
+/* ------------------------------------------------------------------------ */
+
+const KEY = "teamDashboardCfg";
+const $ = id => document.getElementById(id);
+let cfg = load(), rotTimer = null, refTimer = null, activeIdx = 0;
+let layouts = ["side","stack","single"], layoutIdx = 0;
+
+function load(){
+  try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(KEY) || "{}")); }
+  catch(e){ return Object.assign({}, DEFAULTS); }
+}
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch(e){} }
+
+function build(){
+  [[1,cfg.n1,cfg.u1],[2,cfg.n2,cfg.u2]].forEach(([i,name,url])=>{
+    const pane = $("pane"+i);
+    pane.querySelectorAll("iframe,.empty").forEach(n=>n.remove());
+    $("label"+i).textContent = name || ("Report "+i);
+    if(url){
+      const f = document.createElement("iframe");
+      f.src = url; f.allowFullscreen = true;
+      f.setAttribute("allow","fullscreen; autoplay");
+      pane.appendChild(f);
+    } else {
+      const d = document.createElement("div");
+      d.className = "empty";
+      d.textContent = "No link yet. Open Settings and paste the URL for " + (name || "this report") + ".";
+      pane.appendChild(d);
+    }
+  });
+}
+
+function applyLayout(){
+  document.body.classList.remove("stack","single");
+  const l = layouts[layoutIdx];
+  if(l==="stack") document.body.classList.add("stack");
+  if(l==="single") document.body.classList.add("single");
+  $("btnLayout").textContent = "Layout: " + {side:"Side by side",stack:"Top / bottom",single:"One at a time"}[l];
+  showActive();
+}
+function showActive(){
+  $("pane1").classList.toggle("active", activeIdx===0);
+  $("pane2").classList.toggle("active", activeIdx===1);
+}
+
+function setRotate(on){
+  clearInterval(rotTimer);
+  $("btnRotate").classList.toggle("on", on);
+  $("btnRotate").textContent = "Auto-rotate: " + (on ? "on" : "off");
+  if(on){
+    // rotation only makes sense one-at-a-time
+    layoutIdx = 2; applyLayout();
+    rotTimer = setInterval(()=>{ activeIdx = 1-activeIdx; showActive(); }, Math.max(5,cfg.rot)*1000);
+  }
+}
+function setRefresh(){
+  clearInterval(refTimer);
+  if(cfg.ref>0) refTimer = setInterval(build, cfg.ref*60000);
+}
+
+function toggleFull(){
+  if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+  else document.exitFullscreen();
+}
+document.addEventListener("fullscreenchange", ()=>{
+  const fs = !!document.fullscreenElement;
+  document.body.classList.toggle("hidebar", fs);
+  $("btnFull").textContent = fs ? "Exit full screen" : "Full screen";
+});
+
+// In full screen, move the mouse to the top edge to bring the toolbar back
+document.addEventListener("mousemove", e=>{
+  if(document.fullscreenElement) document.body.classList.toggle("hidebar", e.clientY > 50);
+});
+
+$("btnFull").onclick = toggleFull;
+$("btnLayout").onclick = ()=>{ layoutIdx=(layoutIdx+1)%3; applyLayout(); };
+$("btnRotate").onclick = ()=> setRotate(!$("btnRotate").classList.contains("on"));
+$("btnRefresh").onclick = build;
+$("btnSettings").onclick = ()=>{
+  ["n1","u1","n2","u2","rot","ref"].forEach(k=>$(k).value = cfg[k]);
+  $("dlg").showModal();
+};
+$("btnCancel").onclick = ()=> $("dlg").close();
+$("btnSave").onclick = ()=>{
+  ["n1","u1","n2","u2"].forEach(k=>cfg[k]=$(k).value.trim());
+  cfg.rot = +$("rot").value || 30; cfg.ref = +$("ref").value || 0;
+  save(); build(); setRefresh();
+  if($("btnRotate").classList.contains("on")) setRotate(true);
+  $("dlg").close();
+};
+document.addEventListener("keydown", e=>{
+  if(e.target.tagName==="INPUT") return;
+  if(e.key==="f"||e.key==="F") toggleFull();
+  if(e.key==="l"||e.key==="L") $("btnLayout").click();
+  if(e.key==="r"||e.key==="R") $("btnRotate").click();
+});
+
+build(); applyLayout(); setRefresh();
+if(!cfg.u1 && !cfg.u2) $("btnSettings").click();
+</script>
+</body>
+</html>
